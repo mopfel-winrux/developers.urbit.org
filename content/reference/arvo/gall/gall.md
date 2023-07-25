@@ -59,11 +59,10 @@ definable in a regular recursive data type).
 
 ## Specification
 
-An agent is defined as a [core](/reference/glossary/core/) with a set of
-[arms](/reference/glossary/arm/) to handle various events. These
-handlers usually produce a list of effects and the next state of the
-agent. The interface definition can be found in `sys/lull.hoon`, which
-at the time of writing is:
+An agent is defined as a [core](/reference/glossary/core/) with a set of [arms](/reference/glossary/arm/) to handle various
+events. These handlers usually produce a list of effects and the next
+state of the agent. The interface definition can be found in
+`sys/lull.hoon`, which at the time of writing is:
 
 ```hoon
 ++  agent
@@ -72,13 +71,8 @@ at the time of writing is:
   +$  step  (quip card form)
   +$  card  (wind note gift)
   +$  note
-    $%  [%agent [=ship name=term] =task]
-        [%arvo note-arvo]
-        [%pyre =tang]
-    ::
-        [%grow =spur =page]
-        [%tomb =case =spur]
-        [%cull =case =spur]
+    $%  [%arvo =note-arvo]
+        [%agent [=ship name=term] =task]
     ==
   +$  task
     $%  [%watch =path]
@@ -88,8 +82,8 @@ at the time of writing is:
         [%poke-as =mark =cage]
     ==
   +$  gift
-    $%  [%fact paths=(list path) =cage]
-        [%kick paths=(list path) ship=(unit ship)]
+    $%  [%fact path=(unit path) =cage]
+        [%kick path=(unit path) ship=(unit ship)]
         [%watch-ack p=(unit tang)]
         [%poke-ack p=(unit tang)]
     ==
@@ -140,7 +134,6 @@ at the time of writing is:
       |~  [term tang]
       *(quip card _^|(..on-init))
     --
-  --
 ```
 
 Here's a skeleton example of an implementation:

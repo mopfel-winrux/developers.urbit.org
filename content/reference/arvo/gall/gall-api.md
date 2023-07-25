@@ -3,579 +3,955 @@ title = "API Reference"
 weight = 3
 +++
 
-## Agent Notes
+## Reference Agent
 
-A `note` is a request to a vane or agent which you initiate. A `note` is
-one of:
+This app stores a number for each user. You can increment your number, increment
+someone else's number, start tracking someone else's number by poking. It
+exposes a scry namespace to inspect everyone's number.
+
+### `app/example-gall.hoon`
 
 ```hoon
+::  Import sur/example-gall
+/-  *example-gall
+::  Import lib/default-agent
+/+  default-agent
+|%
++$  card  card:agent:gall
 +$  note
-  $%  [%agent [=ship name=term] =task]
-      [%arvo note-arvo]
-      [%pyre =tang]
-  ::
-      [%grow =spur =page]
-      [%tomb =case =spur]
-      [%cull =case =spur]
+  $%
+    [%arvo =note-arvo]
+    [%agent [=ship name=term] =task:agent:gall]
+  ==
++$  state-zero  [%0 local=@ud]
++$  state-one  [%1 local=@ud remote=(map @p @ud)]
++$  versioned-state
+  $%
+    state-zero
+    state-one
+  ==
+--
+=|  state-one
+=*  state  -
+^-  agent:gall
+|_  =bowl:gall
++*  this  .
+    def   ~(. (default-agent this %|) bowl)
+::
+:: Set local counter to 1 by default
+++  on-init
+  ^-  (quip card _this)
+  `this(local 1)
+:: Expose state for saving
+++  on-save
+  !>(state)
+::
+:: Load old state and upgrade if neccessary
+++  on-load
+  |=  old=vase
+  ^-  (quip card _this)
+  =/  loaded=versioned-state
+    !<(versioned-state old)
+  ?-  -.loaded
+      %0
+    `this(local local.loaded) :: Upgrade old state
+      %1
+    `this(state loaded)
+  ==
+::
+:: Respond to poke
+:: App can be poked in the dojo by running the following commands
+:: Increment local counter
+:: :example-gall &example-gall-action [%increment ~]
+:: Increment ~zod's counter
+:: :example-gall &example-gall-action [%increment-remote ~zod]
+:: Subscribe to ~zod's counter
+:: :example-gall &example-gall-action [%view ~zod]
+:: Unsubscribe from ~zod's counter
+:: :example-gall &example-gall-action [%stop-view ~zod]
+::
+++  on-poke
+  |=  [=mark =vase]
+  ^-  (quip card _this)
+  ::  Ensure poke is of mark %example-gall-action
+  ?>  =(mark %example-gall-action)
+  =/  act=example-gall-action  !<(example-gall-action vase)
+  ?-  act
+        ::
+        :: Increment local counter and send new counter to subscribers
+        ::
+      [%increment ~]
+    :-  [%give %fact ~[/local] %atom !>(+(local))]~
+    this(local +(local))
+        ::
+        :: Send remote %increment poke
+        ::
+      [%increment-remote who=@p]
+    :_  this
+    :~  :*
+      %pass
+      /inc/(scot %p who.act)
+      %agent
+      [who.act %example-gall]
+      %poke  %example-gall-action  !>([%increment ~])
+    ==  ==
+        ::
+        :: Subscribe to a remote counter
+        ::
+      [%view who=@p]
+    :_  this
+    [%pass /view/(scot %p who.act) %agent [who.act %example-gall] %watch /local]~
+        ::
+        :: Unsubscribe from remote counter and remove from state
+        ::
+      [%stop-view who=@p]
+    :_  this(remote (~(del by remote) who.act))
+    [%pass /view/(scot %p who.act) %agent [who.act %example-gall] %leave ~]~
+        ::
+  ==
+::
+:: Print on unsubscribe
+::
+++  on-leave
+  |=  =path
+  ^-  (quip card _this)
+  ~&  "Unsubscribed by: {<src.bowl>} on: {<path>}"
+  `this
+::
+:: Handle new subscription
+::
+:: When another ship subscribes to our counter, give them the current state of
+:: the counter immediately
+::
+++  on-watch
+  |=  =path
+  ^-  (quip card _this)
+  :_  this
+  :: Crash if we see a subscription we don't recognise
+  ?+  path  ~|("unexpected subscription" !!)
+         ::
+       [%local ~]
+    [%give %fact ~ %atom !>(local)]~
+  ==
+::
+:: Expose scry namespace
+::
+:: .^(@ %gx /=example-gall=/local/atom) will produce the current local counter
+:: .^(@ %gx /=example-gall=/remote/~zod/atom) will produce the counter for ~zod
+:: .^(arch %gy /=example-gall=/remote) will produce a listing of the current
+:: remote counters
+++  on-peek
+  |=  =path
+  ^-  (unit (unit cage))
+  ?+  path  [~ ~]
+        ::
+        :: Produce local counter
+        ::
+      [%x %local ~]
+    ``[%atom !>(local)]
+        ::
+        :: Produce remote counter
+        ::
+      [%x %remote who=@ta ~]
+    =*  location  i.t.t.path :: Ship name is third in the list
+    =/  res
+      (~(got by remote) (slav %p location))
+    ``[%atom !>(res)]
+        ::
+        :: Produce listing of remote counters
+        ::
+      [%y %remote ~]
+    =/  dir=(map @ta ~)
+      %-  molt           :: Map from list of k-v pairs
+      %+  turn           :: iterate over list of k-v pairs
+        ~(tap by remote) :: list of k-v pairs from map
+      |=  [who=@p *]
+      [(scot %p who) ~]
+    ``[%arch !>(`arch`[~ dir])]
+  ==
+::
+:: Handle sign from agent
+::
+++  on-agent
+  |=  [=wire =sign:agent:gall]
+  ^-  (quip card _this)
+  ?-    -.sign
+          ::
+          :: Print error if poke failed
+          ::
+        %poke-ack
+      ?~  p.sign
+        `this
+      %-  (slog u.p.sign)
+      `this
+          ::
+          :: Print error if subscription failed
+          ::
+        %watch-ack
+      ?~  p.sign
+        `this
+      =/  =tank  leaf+"subscribe failed from {<dap.bowl>} on wire {<wire>}"
+      %-  (slog tank u.p.sign)
+      `this
+          ::
+          :: Do nothing if unsubscribed
+          ::
+        %kick  `this
+          ::
+          :: Update remote counter when we get a subscription update
+          ::
+        %fact
+      :-  ~
+      ?.  ?=(%atom p.cage.sign)
+        this
+      this(remote (~(put by remote) src.bowl !<(@ q.cage.sign)))
+  ==
+::
+:: Handle arvo signs
+::
+:: We never give any cards to arvo. Therefore we never need to handle any signs
+:: from arvo. We use the default-agent library to avoid implementing this arm,
+:: as gall apps must have all the arms.
+::
+++  on-arvo  on-arvo:def
+::
+:: Handle error
+::
+:: Print errors when they happen
+::
+++  on-fail
+  |=  [=term =tang]
+  ^-  (quip card _this)
+  %-  (slog leaf+"error in {<dap.bowl>}" >term< tang)
+  `this
+--
+
+```
+
+### `sur/example-gall.hoon`
+
+```hoon
+|%
++$  example-gall-action
+  $%
+     [%view who=@p]
+     [%stop-view who=@p]
+     [%increment-remote who=@p]
+     [%increment ~]
+  ==
+--
+```
+
+### `mar/example-gall/action.hoon`
+
+```hoon
+/-  *example-gall
+|_  act=example-gall-action
+++  grab
+  |%
+  ++  noun  example-gall-action
+  --
+--
+```
+
+## Arms
+
+### `++on-init`
+
+Application initialisation
+
+`++on-init` is called when an application is first started. It is not a gate and
+has no input.
+
+#### Returns
+
+```hoon
+(quip card _this)
+```
+
+List of cards and new agent
+
+#### Example
+
+```hoon
+:: From reference agent.
+:: Set local counter to 1 by default
+::
+++  on-init
+  ^-  (quip card _this)
+  `this(local.sta 1)
+:: From app/weather.hoon. This setup is typical of a landscape tile.
+::
+++  on-init
+  :_  this
+  :~  [%pass /bind/weather %arvo %e %connect [~ /'~weather'] %weather]
+      :*  %pass  /launch/weather  %agent  [our.bol %launch]  %poke
+          %launch-action  !>([%weather /weathertile '/~weather/js/tile.js'])
+      ==
   ==
 ```
 
-A `note` is always wrapped in a `%pass` `card`, like so:
+### `++on-save`
+
+Expose state for saving.
+
+This arm is called immediately before the agent is upgraded. It packages the
+permament state of the agent in a vase for the next version of the agent.
+Unlike most handlers, this cannot produce effects. It is not a gate and has no input.
+
+#### Returns
+
+`vase` of permanent state.
+
+#### Example
 
 ```hoon
-[%pass p=wire q=note]
+:: From reference agent
+::
+:: Expose state for saving
+::
+++  on-save
+  !>(state)
 ```
 
-The `wire` is just a `path` like `/foo/bar/baz`. You use it as a tag to
-identify responses.
+### `++on-load`
 
-The possible cases of an `%agent` `note` are documented [separately
-below](#agent-tasks).
+Application upgrade.
 
-We'll look at the remaining cases here.
+This arm is called immediately after the agent is upgraded. It receives
+a vase of the state of the previously-running version of the agent, obtained
+from `+on-save`, which allows it to cleanly upgrade from the old agent.
 
-### `%arvo`
-
-Pass a vane `task` to a vane (kernel module).
+#### Accepts
 
 ```hoon
-[%arvo note-arvo]
+=vase
 ```
 
-A `note-arvo` is defined as the following:
+`vase` of previous state, from `++on-save`
+
+#### Returns
 
 ```hoon
-+$  note-arvo
-  $~  [%b %wake ~]
-  $%  [%a task:ames]
-      [%b task:behn]
-      [%c task:clay]
-      [%d task:dill]
-      [%e task:eyre]
-      [%g task:gall]
-      [%i task:iris]
-      [%j task:jael]
-      [%k task:khan]
-      [%$ %whiz ~]
-      [@tas %meta vase]
+(quip card _this)
+```
+
+List of cards and new agent
+
+#### Examples
+
+```hoon
+:: From reference agent
+::
+:: Load old state and upgrade if neccessary
+++  on-load
+  |=  old=vase
+  ^-  (quip card _this)
+  =/  loaded=versioned-state
+    !<(versioned-state old)
+  ?-  -.loaded
+      %0
+    `this(local local.loaded) :: Upgrade old state
+      %1
+    `this(state loaded)
   ==
 ```
 
-The first part is vane letter (`%g` for Gall, `%i` for Iris, etc). The
-second part is a `task` belonging to that vane.
+### `++on-poke`
 
----
+Handle application poke.
 
-### `%pyre`
+This arm is called when the agent is "poked". The input is a cage, so
+it's a pair of a mark and a dynamic vase.
 
-Abort event.
-
-```hoon
-[%pyre =tang]
-```
-
-This `note` tells Gall to crash with the given `tang` in the stack
-trace. You'd use it in `++on-load` or `++on-init` when you wanted the
-upgrade/installation to fail under some condition.
-
----
-
-### `%grow`
-
-Publish remote scry file.
+#### Accepts
 
 ```hoon
-[%grow =spur =page]
+[=mark =vase]
 ```
 
-The `spur` is the `path` the file should be published at. The revision
-number will be determined implicitly. As an example, if the `spur` was
-`/foo`, the agent `%bar`, and it was the first revision, the resulting
-remote scry path would be `/g/x/0/bar//foo`
+`mark` is the mark of the poked data.
 
-The `page` is the file, a pair of `[p=mark q=noun]`.
+`vase` is a vase with the poked data inside.
 
----
-
-### `%tomb`
-
-Delete remote scry file.
+#### Returns
 
 ```hoon
-[%tomb =case =spur]
+(quip card _this)
 ```
 
-The `case` is the file revision, for example `[%ud 3]`. The spur is the
-`path` it's bound to, for example `/foo`.
+List of cards and new agent.
 
-The file at the specified `spur` and specific `case` will be deleted and
-replaced by a simple hash.
-
----
-
-### `%cull`
-
-Delete remote scry file up to the given revision.
+#### Example
 
 ```hoon
-[%cull =case =spur]
+:: From reference agent.
+::
+:: Respond to poke
+:: App can be poked in the dojo by running the following commands
+:: Increment local counter
+:: :example-gall &example-gall-action [%increment ~]
+:: Increment ~zod's counter
+:: :example-gall &example-gall-action [%increment-remote ~zod]
+:: Subscribe to ~zod's counter
+:: :example-gall &example-gall-action [%view ~zod]
+:: Unsubscribe from ~zod's counter
+:: :example-gall &example-gall-action [%stop-view ~zod]
+::
+++  on-poke
+  |=  [=mark =vase]
+  ^-  (quip card _this)
+  ::  Ensure poke is of mark %example-gall-action
+  ?>  =(mark %example-gall-action)
+  =/  act=example-gall-action  !<(example-gall-action vase)
+  ?-  act
+        ::
+        :: Increment local counter and send new counter to subscribers
+        ::
+      [%increment ~]
+    :-  [%give %fact ~[/local] %atom !>(+(local))]~
+    this(local +(local))
+        ::
+        :: Send remote %increment poke
+        ::
+      [%increment-remote who=@p]
+    :_  this
+    :~  :*
+      %pass
+      /inc/(scot %p who.act)
+      %agent
+      [who.act %example-gall]
+      %poke  %example-gall-action  !>([%increment ~])
+    ==  ==
+        ::
+        :: Subscribe to a remote counter
+        ::
+      [%view who=@p]
+    :_  this
+    [%pass /view/(scot %p who.act) %agent [who.act %example-gall] %watch /local]~
+        ::
+        :: Unsubscribe from remote counter and remove from state
+        ::
+      [%stop-view who=@p]
+    :_  this(remote (~(del by remote) who.act))
+    [%pass /view/(scot %p who.act) %agent [who.act %example-gall] %leave ~]~
+        ::
+  ==
 ```
 
-All revisions of the remote scry file published at the `path` in `spur`
-up to and including the revision specified in `case` will be deleted.
-For example, if the `case` is `[%ud 2]`, then revisions `0`, `1`, and
-`2` will all be deleted.
+### `++on-watch`
 
----
+Handle new subscriber.
 
-## Agent Tasks
+This arm is called when a program wants to subscribe to the agent on a
+particular path. The agent may or may not need to perform setup steps
+to intialize the subscription. It may produce a `%give`
+`%subscription-result` to the subscriber to get it up to date, but after
+this event is complete, it cannot give further updates to a specific
+subscriber. It must give all further updates to all subscribers on a
+specific path.
 
-A `task` is a request to an agent you initiate, as opposed to a
-[`gift`](#agent-gifts), which is a response.
+If this arm crashes, then the subscription is immediately terminated.
+More specifcally, it never started -- the subscriber will receive a
+negative `%watch-ack`. You may also produce an explicit `%kick` to
+close the subscription without crashing -- for example, you could
+produce a single update followed by a `%kick`.
 
-Passing an agent `task` looks like so:
+#### Accepts
 
 ```hoon
-[%pass p=wire q=[%agent [=ship name=term] =task]]
+=path
 ```
 
-- `wire`: this is just a `path` like `/foo/bar/baz`. You use it as a tag
-  to identify any [`gift`](#agent-gifts) that come back in response.
-- `ship`: is the ship to pass the `task` to.
-- `name`: is the name of the agent on the specified ship that should
-  receive the `task`.
-- `task`: the `task` itself, as described below.
+Path of new subscription.
 
-### `%watch`
-
-Subscribe to a path on an agent for updates.
+#### Returns
 
 ```hoon
-[%watch =path]
+(quip card _this)
 ```
 
-The `path` is a subscription `path` like `/foo/bar/baz` which the
-receiving agent publishes updates on. The publisher's Gall will
-automatically respond with a [`%watch-ack`](#watch-ack). The
-`%watch-ack` will be positive (an "ack") if the agent did not crash
-processing the `%watch`, and will be negative (a "nack") if it crashed.
+List of cards and new agent.
 
-Assuming the subscription request was successful (and therefore the
-`%watch-ack` was positive), the publisher will begin sending updates as
-[`%fact`](#fact) `gift`s to the subscriber. The publisher will continue
-sending updates until the subscriber [`%leave`](#leave)s or the
-publisher [`%kick`](#kick)s them.
-
----
-
-### `%watch-as`
-
-Subscribe to a path on an agent for updates, asking for the updates to
-have a specified `mark`.
+#### Example
 
 ```hoon
-[%watch-as =mark =path]
+:: From reference agent
+::
+:: Handle new subscription
+::
+:: When another ship subscribes to our counter, give them the current state of
+:: the counter immediately
+::
+++  on-watch
+  |=  =path
+  ^-  (quip card _this)
+  :_  this
+  ?+  path  on-watch:def
+         ::
+       [%local ~]
+    [%give %fact ~ %atom !>(local)]~
+  ==
 ```
 
-The `path` is a subscription `path` like `/foo/bar/baz` which the
-receiving agent publishes updates on. The `mark` is the `mark` you want
-the publisher to use for the data it gives you in the updates.
+### `++on-leave`
 
-This behaves the same as an ordinary [`%watch`](#watch) request, except
-the publisher's Gall will try to convert from the `mark` of the `%fact`s
-the agent produced to the `mark` you specified before sending it off. If
-the publisher's Gall is unable to perform the mark conversion, you'll
-get [`%kick`](#kick)ed from the subscription, and they'll send
-themselves a [`%leave`](#leave) on your behalf.
+Handle unsubscribe.
 
----
+This arm is called when a program becomes unsubscribed to you.
+Subscriptions may close because the subscriber intentionally
+unsubscribed, but they also could be closed by an intermediary. For
+example, if a subscription is from another ship which is currently
+unreachable, Ames may choose to close the subscription to avoid queueing
+updates indefinitely. If the program crashes while processing an
+update, this may also generate an unsubscription. You should consider
+subscriptions to be closable at any time.
 
-### `%leave`
-
-Unsubscribe from a subscription path on an agent.
+#### Accepts
 
 ```hoon
-[%leave ~]
+=path
 ```
 
-The subscription to end is determined by the `wire`, `ship` and agent
-`name` in the `%pass` `card` this is wrapped in. That is, if you
-originally subscribed to subscription path `/foo/bar/baz` in agent
-`%foo` on ship `~zod` using `wire` `/x/y/z`, you'd unsubscribe by
-specifying `/x/y/z`, `~zod` and `%foo`.
+Path of the closed subscription.
 
-Once sent, you'll stop receiving `%fact`s from the publisher for the
-subscription in question.
-
----
-
-### `%poke`
-
-A one-off request/datagram to an agent.
+#### Returns
 
 ```hoon
-[%poke =cage]
+(quip card _this)
 ```
 
-A `%poke` `task` is a one-off, unsolicited delivery of some data. This
-is in contrast to a [`%fact`](#fact) `gift`, the other basic method of
-passing data between agents, which is ultimately a solicited response to
-a past [`%watch`](#watch) request for subscription updates. Unlike a
-`%watch` request, the recipient of the `%poke` cannot directly send data
-back to the `%poke`-er (though they could conceivably send a new,
-separate `%poke` back). The only response you get to a `%poke` is a
-[`%poke-ack`](#poke-ack), indicating a simple success/failure result.
+List of cards and new agent.
 
-The data of the `%poke` is contained in the `cage`, which is a pair of
-`[p=mark q=vase]`. It's the basic way to pass around dynamically typed
-data.
-
----
-
-### `%poke-as`
-
-A one-off request/datagram to an agent, asking the recipient's Gall to
-convert the data to the specified `mark` before delivering it to the
-agent.
+#### Example
 
 ```hoon
-[%poke-as =mark =cage]
+:: From reference agent. Prints a message when programs become unsubscribed.
+++  on-leave
+  |=  =path
+  ^-  (quip card _this)
+  ~&  "Unsubscribe by: {<src.bowl>} on: {<path>}"
+  `this
 ```
 
-This behaves the same as an ordinary [`%poke`](#poke) but with
-additional `mark` conversion to the `mark` you specify by the
-recipient's Gall.
+### `++on-peek`
 
-The `mark` is the `mark` you want the `cage` converted *to* before
-delivery to the agent. The `cage` is the data itself, a pair of `[p=mark
-q=vase]`. The mark conversion will be performed by the recipient's Gall,
-not the sender's.
+Handle scry request.
 
-If the `mark` conversion fails, the sender will be sent a negative
-[`%poke-ack`](#poke-ack) (nack). Otherwise, the recipient will receive a
-`%poke` with the target `mark` specified.
+This arm is called when a program reads from the agent's "scry"
+namespace, which should be referentially transparent. Unlike most
+handlers, this cannot perform IO, and it cannot change the state. All
+it can do is produce a piece of data to the caller, or not.
 
----
+#### Accepts
+
+```hoon
+=path
+```
+
+The path being scryed for.
+
+```hoon
+:: Example scry to path mappings
+::
+.^(arch %gy /=example-gall=/remote)
+:: Path will be /y/remote
+.^(@ %gx /=example-gall=/local/atom)
+:: Path will be /x/local
+```
+
+#### Returns
+
+```hoon
+(unit (unit cage))
+```
+
+If this arm produces `[~ ~ data]`, then `data` is the value at the the
+given path. If it produces `[~ ~]`, then there is no data at the given
+path and never will be. If it produces `~`, then we don't know yet whether
+there is or will be data at the given path. The head of the path is known as the
+`care`. Requests with a care of `%x` should return a vase that matches or is
+convertible to the mark at the end of the scry request. This mark is not
+included in the path passed to `++on-peek`. Requests with a care of `%y` should
+return a cage with a mark of `%arch` and a vase of `arch`.
+
+#### Example
+
+```hoon
+:: From reference agent
+::
+:: Expose scry namespace
+::
+:: .^(@ %gx /=example-gall=/local/atom) will produce the current local counter
+:: .^(@ %gx /=example-gall=/remote/~zod/atom) will produce the counter for ~zod
+:: .^(arch %gy /=example-gall=/remote) will produce a listing of the current
+:: remote counters
+++  on-peek
+  |=  =path
+  ^-  (unit (unit cage))
+  ?+  path  [~ ~]
+        ::
+        :: Produce local counter
+        ::
+      [%x %local ~]
+    ``[%atom !>(local)]
+        ::
+        :: Produce remote counter
+        ::
+      [%x %remote who=@ta ~]
+    =*  location  i.t.t.path :: Ship name is third in the list
+    =/  res
+      (~(got by remote) (slav %p location))
+    ``[%atom !>(res)]
+        ::
+        :: Produce listing of remote counters
+        ::
+      [%y %remote ~]
+    =/  dir=(map @ta ~)
+      %-  molt           :: Map from list of k-v pairs
+      %+  turn           :: iterate over list of k-v pairs
+        ~(tap by remote) :: list of k-v pairs from map
+      |=  [who=@p *]
+      [(scot %p who) ~]
+    ``[%arch !>(`arch`[~ dir])]
+  ==
+```
+
+### `++on-agent`
+
+Handle `%pass` card
+
+This arm is called to handle responses to `%pass` cards to other agents.
+It will be one of the following types of response:
+
+- `%poke-ack`: acknowledgment (positive or negative) of a poke. If the
+  value is `~`, then the poke succeeded. If the value is `[~ tang]`,
+  then the poke failed, and a printable explanation (eg a stack trace)
+  is given in the `tang`.
+
+- `%watch-ack`: acknowledgment (positive or negative) of a subscription.
+  If negative, the subscription is already ended (technically, it never
+  started).
+
+- `%fact`: update from the publisher.
+
+- `%kick`: notification that the subscription has ended. This happens because
+  either the target app passed a `%leave` note, or ames killed the subscription
+  due to backpressure. Most of the time you will want to resubscribe. If you can
+  no longer access the subscription you will get a negative `%watch-ack` and end
+  your flow there.
+
+#### Accepts
+
+```hoon
+[=wire =sign:agent:gall]
+```
+
+`wire` is the wire from the `+gift` that triggered `++on-agent`
+
+`sign` is response for the gift.
+
+#### Returns
+
+```hoon
+(quip card _this)
+```
+
+#### Example
+
+```hoon
+:: From reference agent
+::
+:: Handle sign from agent
+::
+++  on-agent
+  |=  [=wire =sign:agent:gall]
+  ^-  (quip card _this)
+  ?-    -.sign
+          ::
+          :: Print error if poke failed
+          ::
+        %poke-ack
+      ?~  p.sign
+        `this
+      %-  (slog u.p.sign)
+      `this
+          ::
+          :: Print error if subscription failed
+          ::
+        %watch-ack
+      ?~  p.sign
+        `this
+      =/  =tank  leaf+"subscribe failed from {<dap.bowl>} on wire {<wire>}"
+      %-  (slog tank u.p.sign)
+      `this
+          ::
+          :: Do nothing if unsubscribed
+          ::
+        %kick  `this
+          ::
+          :: Update remote counter when we get a subscription update
+          ::
+        %fact
+      :-  ~
+      ?.  ?=(%atom p.cage.sign)
+        this
+      this(remote (~(put by remote) src.bowl !<(@ q.cage.sign)))
+  ==
+```
+
+### `++on-arvo`
+
+Handle vane response
+
+This arm is called to handle responses for `%pass` cards to vanes.
+
+#### Accepts
+
+```hoon
+  [=wire =sign:agent:gall]
+```
+
+`wire` is the wire from the `++gift` that triggered `++on-arvo`.
+
+`sign` is the response from the vane. The list of possible responses from the
+vanes is statically defined in sys/zuse.hoon (grep for `++ sign-arvo`).
+
+#### Returns
+
+```hoon
+(quip card _this)
+```
+
+List of cards and new agent.
+
+#### Example
+
+```hoon
+:: From app/weather.hoon. Handles %bound, %wake and %http-response signs
+++  on-arvo
+  |=  [=wire =sign-arvo]
+  ^-  (quip card:agent:gall _this)
+  ?:  ?=(%bound +<.sign-arvo)
+    [~ this]
+  ?:  ?=(%wake +<.sign-arvo)
+    =^  cards  state
+      (wake:wc wire error.sign-arvo)
+    [cards this]
+  ?:  ?=(%http-response +<.sign-arvo)
+    =^  cards  state
+      (http-response:wc wire client-response.sign-arvo)
+    [cards this]
+  (on-arvo:def wire sign-arvo)
+::
+:: From reference agent
+::
+:: Handle arvo signs
+::
+:: We never give any cards to arvo. Therefore we never need to handle any signs
+:: from arvo. We use the default-agent library to avoid implementing this arm,
+:: as gall apps must have all the arms specified in the agent:gall definition.
+::
+++  on-arvo  on-arvo:def
+```
+
+### `++on-fail`
+
+Handle error.
+
+If an error happens in `+on-poke`, the crash report goes into the
+`%poke-ack` response. Similarly, if an error happens in
+`+on-subscription`, the crash report goes into the `%watch-ack`
+response. If a crash happens in any of the other handlers, the report
+is passed into this arm.
+
+#### Accepts
+
+```hoon
+[=term =tang]
+```
+
+`term` is a cord describing the error.
+
+`tang` is a stack trace for the error.
+
+#### Returns
+
+```hoon
+(quip card _this)
+```
+
+List of cards and new agent
+
+#### Example
+
+```hoon
+::
+:: Handle error
+::
+:: Print errors when they happen
+::
+++  on-fail
+  |=  [=term =tang]
+  ^-  (quip card _this)
+  %-  (slog leaf+"error in {<dap.bowl>}" >term< tang)
+  `this
+```
 
 ## Agent Gifts
 
-An agent `gift` is ultimately a response to an agent `task`. Sometimes
-it's an immediate, direct response, and other times it happens down the
-line, or there's an ongoing series of gifts, as in the case of
-subscriptions. They do all ultimately arise from an original `task`,
-though, be it a a `%watch` subscription request or a `%poke`. A `gift`
-cannot be sent out unsolicited to other agents. Where they are routed
-to, whether another local agent, an agent on a remote ship, or even to
-vanes or a browser-based front-end in some cases, is determined by the
-original `task`.
-
-Giving a gift takes the general form of:
+Giving a gift takes the general form of
 
 ```hoon
-[%give p=gift]
+[%give =gift]
 ```
-
-Each possible `gift` is detailed below.
 
 ### `%fact`
 
 Produce a subscription update.
 
+Produces a subscription update. A subscription update is a new piece of
+subscription content for all subscribers on a given path.
+
+#### Structure
+
 ```hoon
-[%fact paths=(list path) =cage]
+[%fact (list path) =cage]
 ```
 
-A `%fact` is a piece of data given to all subscribers on one or more
-subscription paths.
+`(list path)` is a list of the paths to send the update on. If no path is
+given, then the update is only given to the program that instigated the
+request. Typical use of this mode is in `+on-watch` to give an initial update
+to a new subscriber to get them up to date.
 
-The fields are:
+`cage` is a cage of the subscription update.
 
-- `paths`: a list of subscription paths to send the update on. In
-  `+on-watch` alone, if no path is given, then the update is given
-  exclusively to the source of the `%watch` request. This is useful for
-  giving initial state to new subscribers. In other contexts, one or
-  more subscription paths should be provided.
-- `cage`: the data. A `cage` is a pair of `[p=mark q=vase]`.
+#### Example
 
----
+```hoon
+:: From ++on-watch in reference agent.
+::
+:: Gives current local state to new subscribers.
+[%give %fact ~ %atom !>(local.sta)]
+
+
+:: From ++on-poke in reference agent
+::
+:: Gives incremented local state to any subscribers on /local
+[%give %fact ~[/local] %atom !>(+(local))]
+```
 
 ### `%kick`
 
 Close subscription.
 
-```hoon
-[%kick paths=(list path) ship=(unit ship)]
-```
+Closes a subscription. A subscription close closes the subscription for all or
+one subscribers on a given path.
 
-If `ship` is null, all subscribers will be kicked from the specified
-subscription `paths` and will stop receiving updates. If `ship` is
-non-null, only the specified ship will be kicked from the given `paths`.
-
-It should be noted that `%kick` `gift`s are not *only* emitted
-intentionally by the publishing agent. Gall itself will `%kick` remote
-subscribers if too many undelivered outbound `%fact`s queue up due to
-network connectivity problems. On the subscriber side, their Gall will
-`%kick` themselves if they crash while processing an incoming `%fact`.
-It should therefore not be assumed the `%kick` was intentional.
-Typically agents will be designed to resubscribe on `%kick` with a new
-`%watch`, only giving up on negative `%watch-ack`. You should be careful
-with automatic resubscribe logic, though, because you can inadvertently
-create a network loop of infinite resubscribes and kicks if, for
-example, a crash on `%fact` is repeatable.
-
----
-
-### `%watch-ack`
-
-Acknowledge a subscription request.
+#### Structure
 
 ```hoon
-[%watch-ack p=(unit tang)]
+[%kick (unit path) (unit ship)]
 ```
 
-A `%watch-ack` is automatically given by Gall in response to a `%watch`
-`task`. A `%watch-ack` is either positive (an "ack") or negative (a
-"nack"). It's an ack when `p` is null, and a nack when `p` is non-null,
-instead containing a stack trace.
+`(unit path)` is the path of the subscription being updated. If no path is
+given, then the update is only given to the program that instigated the request.
+Typical use of this mode would be in `+on-watch` to produce a single update to a
+subscription then close the subscription.
 
-A `%watch-ack` is given *automatically* and *implicitly* by Gall itself,
-it is unnecessary for an agent to emit one explicitly. An ack will be
-given as long as `++on-watch` doesn't crash. A nack will be given if it
-*does* crash, with a trace of the crash in `p`. Your agent should
-therefore be designed to accept or reject a subscription request by
-crashing or not crashing, respectively.
+`(unit ship)` is the ship to close the subscription for. If no path is given,
+then the subscription is closed for all subscribers.
 
----
+## Agent Notes
 
-### `%poke-ack`
-
-Acknowledge a poke.
+Passing a agent note (a 'task') along a wire looks like so.
 
 ```hoon
-[%poke-ack p=(unit tang)]
+[%pass =wire %agent [=ship name=term] =task]
 ```
 
-A `%poke-ack` is automatically given by Gall in response to a `%poke`
-`task`. A `%poke-ack` is either positive (an "ack") or negative (a
-"nack"). It's an ack when `p` is null, and a nack when `p` is non-null,
-instead containing a stack trace.
+`wire` is used to identify the response to the note.
 
-A `%poke-ack` is given *automatically* and *implicitly* by Gall itself,
-it is unnecessary for an agent to emit one explicitly. An ack will be
-given as long as `++on-poke` doesn't crash. A nack will be given if it
-*does* crash, with a trace of the crash in `p`. Your agent should
-therefore be designed to accept or reject a poke by crashing or not
-crashing, respectively.
+`ship` is the ship to pass the note to.
 
----
+`name` is the name of the agent that should receive the note.
 
-## Vane Tasks
+`task` is the task itself, described below.
 
-These are the Vane `task`s that can be `%pass`ed to Gall itself in an
-`%arvo` `note`. Most of these are only used internally by the kernel,
-though some app management `task`s might be of use in userspace.
+### `%poke`
 
-### `%deal`
+Poke an application.
 
-Full transmission.
+This note is passed to poke an application with a cage, a marked vase.
+
+#### Structure
 
 ```hoon
-[%deal p=sock q=term r=deal]
+[%poke =cage]
 ```
 
-Gall translates agent
-[`task:agent`](/reference/arvo/gall/data-types#taskagent)s emitted by
-agents into `%deal` tasks, as well as requests from over the network.
-This `task` is kernel-level only, it cannot be used directly from
-userspace.
+`cage` is the marked data to poke the application with. It is a pair of a mark
+and vase.
 
-Its fields are:
-
-- `p`: A `sock`, a `(pair ship ship)`, the sending and receiving ships.
-- `q`: The source agent.
-- `r`: A [`deal`](/reference/arvo/gall/data-types#deal) is either a
-  [`task:agent`](/reference/arvo/gall/data-types#taskagent) or a
-  `%raw-poke`. This is the request itself.
-
-#### Returns
-
-Gall returns no `gift` in response to a `%deal`.
-
----
-
-### `%sear`
-
-Clear pending queues.
+#### Example
 
 ```hoon
-[%sear =ship]
+:: From ++on-poke in reference agent.
+::
+:: Sends an increment poke to the example-gall agent
+:: on who.act.
+:*
+  %pass
+  /inc/(scot %p who.act)
+  %agent
+  [who.act %example-gall]
+  %poke  %example-gall-action  !>([%increment ~])
+==
 ```
 
-This `task` clears blocked inbound `move`s from the given ship. Moves
-get blocked and queued when sent to an agent that isn't currently
-running.
+### `%watch`
 
-#### Returns
+Subscribe to an application.
 
-Gall returns no `gift` in response to a `%sear`.
+This note is given to subscribe to an application at a path
 
----
-
-### `%jolt`
-
-Restart agent (deprecated).
+#### Structure
 
 ```hoon
-[%jolt =desk =dude]
+[%watch =path]
 ```
 
-Restart agent `dude` on desk `desk`. This `task` is deprecated and now a
-no-op.
+`path` is the path to be subscribed to.
 
-#### Returns
-
-Gall returns no `gift` in response to a `%jolt`.
-
----
-
-### `%idle`
-
-Suspend agent.
+#### Example
 
 ```hoon
-[%idle =dude]
+:: From ++on-poke in reference agent.
+::
+:: Subscribes to the example-gall agent on who.act on the path /local
+::
+[%pass /view/(scot %p who.act) %agent [who.act %example-gall] %watch /local]
 ```
 
-The agent specified in `dude` will be suspended. Note it is usually
-better to suspend agents with a
-[`%rein`](/reference/arvo/clay/tasks#rein---force-apps) `task` to Clay
-rather than an `%idle` `task` to Gall.
+### `%leave`
 
-#### Returns
+Unsubscribe from an application.
 
-Gall returns no `gift` in response to an `%idle`.
+This note is passed to unsubscribe from an application. It should be passed on
+the same wire that the corresponding `%watch` note for the subscription was
+passed on.
 
----
-
-### `%load`
-
-Load agents.
+#### Structure
 
 ```hoon
-[%load =load]
+[%leave ~]
 ```
 
-This `task` is given to Gall by Clay. It contains the compiled agents to
-be installed or updated. This `task` would not be used from userspace.
-
-See the [`load`](/reference/arvo/gall/data-types#load) entry in the
-type reference for more details of the datastructure in this `task`.
-
-#### Returns
-
-Gall returns no `gift` in response to a `%load`.
-
----
-
-### `%nuke`
-
-Delete agent.
+#### Example
 
 ```hoon
-[%nuke =dude]
+:: From ++on-poke in reference agent.
+::
+:: Unsubscribes from the example-gall agent on who.act
+[%pass /view/(scot %p who.act) %agent [who.act %example-gall] %leave ~]
 ```
-
-The agent in `dude` will be stopped and its state discarded.
-
-{% callout %}
-
-**WARNING:** This will irreversibly erase all data stored in the state
-of the agent. Use with care and caution.
-
-{% /callout %}
-
-#### Returns
-
-Gall returns no `gift` in response to a `%nuke`.
-
----
-
-### `%doff`
-
-Kill old-style subscriptions.
-
-```hoon
-[%doff dude=(unit dude) ship=(unit ship)]
-```
-
-Kills nonceless outgoing subscriptions. If `dude` is non-null, it only
-applies to the specified agent. If the `ship` is non-null, it only
-applies to subscriptions to the specified ship. Otherwise, it applies to
-all subscriptions.
-
-You're unlikely to use this `task` from userspace.
-
-#### Returns
-
-Gall returns no `gift` in response to a `%doff`.
-
----
-
-### `%rake`
-
-Reclaim old subscriptions.
-
-```hoon
-[%rake dude=(unit dude) all=?]
-```
-
-This sends an Ames `%cork` on any old subscription ducts. If `dude` is
-null, it applies to all agents, otherwise to the specified one. The
-`all` flag should only be set if you want the ship to try and kill an
-old subscription at sub-nonce zero.
-
-You are unlikely to use this `task`.
-
-#### Returns
-
-Gall returns no `gift` in response to a `%rake`.
-
----
-
-### `%spew`
-
-Set verbosity.
-
-```hoon
-[%spew veb=(list verb)]
-```
-
-This sets verbosity flags for Gall. Currently there's only one
-[`verb`](/reference/arvo/gall/data-types#verb), `%odd`, which prints
-messages for unusual error cases. This overwrites the existing verbosity
-settings: an empty list will turn all verbosity flags off.
-
-#### Returns
-
-Gall returns no `gift` in response to a `%spew`.
-
----
-
-### `%sift`
-
-Filter verbose debug printing to certain agents.
-
-```hoon
-[%sift dudes=(list dude)]
-```
-
-The `dudes` are the agents you want verbose debug printing for. An empty
-list enables it for all agents. See [`%spew`](#spew) for setting
-verbosity.
-
-#### Returns
-
-Gall returns no `gift` in response to a `%sift`.
-
----
-
